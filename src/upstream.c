@@ -201,12 +201,31 @@ upstream_cleanup:
  */
 struct upstream *upstream_get (char *host, struct upstream *up)
 {
+        int n;
+        struct addrinfo hints, *res = NULL;
+        char ipbuf[16] = {0};
+
         while (up) {
                 if (up->target.type == HST_NONE)
                         break;
 
                 if (hostspec_match(host, &up->target))
                         break;
+
+                if (up->target.type == HST_NUMERIC) {
+                        if (ipbuf[0] == '\0') {
+                                memset (&hints, 0, sizeof (struct addrinfo));
+                                hints.ai_family = AF_INET;
+                                hints.ai_socktype = SOCK_STREAM;
+
+                                n = getaddrinfo (host, NULL, &hints, &res);
+                                if (n == 0)
+                                        get_ip_string (res->ai_addr, ipbuf, sizeof (ipbuf));
+                        }
+
+                        if (hostspec_match(ipbuf, &up->target))
+                                break;
+                }
 
                 up = up->next;
         }
@@ -219,6 +238,9 @@ struct upstream *upstream_get (char *host, struct upstream *up)
                              proxy_type_name(up->type), up->host, up->port, host);
         else
                 log_message (LOG_INFO, "No upstream proxy for %s", host);
+
+        if (res)
+                freeaddrinfo (res);
 
         return up;
 }

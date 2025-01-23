@@ -27,6 +27,7 @@
 
 #include "common.h"
 #include "hostspec.h"
+#include "network.h"
 
 enum upstream_build_error {
 	UBE_SUCCESS = 0,
