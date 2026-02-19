@@ -78,6 +78,8 @@ ssize_t read_buffer (int fd, struct buffer_s *b)
                 n = -1; /* EOF */
         } else if (errno == EINTR || errno == EAGAIN) {
                 n = 0; /* retry later */
+        } else if (errno == ECONNRESET || errno == EPIPE || errno == ETIMEDOUT) {
+                log_message (LOG_INFO, "read_buffer: read() failed on fd %d: %s", fd, strerror (errno));
         } else {
                 log_message (LOG_ERR, "read_buffer: read() failed on fd %d: %s", fd, strerror (errno));
         }
@@ -103,6 +105,9 @@ ssize_t write_buffer (int fd, struct buffer_s *b)
                 return n;
         } else if (n == 0 || errno == EINTR || errno == EAGAIN || errno == ENOBUFS) {
                 return 0;
+        } else if (errno == ECONNRESET || errno == EPIPE || errno == ETIMEDOUT) {
+                log_message (LOG_INFO, "write_buffer: send() error \"%s\" on fd %d", strerror (errno), fd);
+                return -1;
         } else {
                 log_message (LOG_ERR, "write_buffer: send() error \"%s\" on fd %d", strerror (errno), fd);
                 return -1;

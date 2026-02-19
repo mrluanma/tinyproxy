@@ -92,7 +92,7 @@ static int read_request_line (struct conn_s *connptr)
 retry:
         len = readline (connptr->client_fd, &connptr->request_line);
         if (len <= 0) {
-                log_message (LOG_ERR,
+                log_message (LOG_INFO,
                              "read_request_line: Client (file descriptor: %d) "
                              "closed socket before read.", connptr->client_fd);
 
@@ -1565,9 +1565,10 @@ get_request_entity(struct conn_s *connptr)
                 ssize_t nread;
                 nread = read_buffer (connptr->client_fd, connptr->cbuffer);
                 if (nread < 0) {
-                        log_message (LOG_ERR,
+                        log_message (LOG_INFO,
                                      "Error reading readable client_fd %d (%s)",
-                                     connptr->client_fd, strerror(errno));
+                                     connptr->client_fd,
+                                     errno ? strerror(errno) : "connection closed");
                         ret = -1;
                 } else {
                         log_message (LOG_INFO,
@@ -1600,7 +1601,6 @@ static void handle_connection_failure(struct conn_s *connptr, int got_headers)
                                      "detail",
                                      "Could not retrieve the request entity "
                                      "the client.", NULL);
-                update_stats (STAT_BADCONN);
         }
 
         if (connptr->error_variables) {
@@ -1687,7 +1687,6 @@ void handle_connection (struct conn_s *connptr, union sockaddr_union* addr)
         }
 
         if (read_request_line (connptr) < 0) {
-                update_stats (STAT_BADCONN);
                 goto done;
         }
 
