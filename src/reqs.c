@@ -59,7 +59,7 @@
  */
 #ifdef UPSTREAM_SUPPORT
 #  define UPSTREAM_CONFIGURED() (config->upstream_list != NULL)
-#  define UPSTREAM_HOST(host) upstream_get(host, config->upstream_list)
+#  define UPSTREAM_HOST(host) upstream_get(host, config->upstream_list, config->upstream_trie)
 #  define UPSTREAM_IS_HTTP(conn) (conn->upstream_proxy != NULL && conn->upstream_proxy->type == PT_HTTP)
 #else
 #  define UPSTREAM_CONFIGURED() (0)

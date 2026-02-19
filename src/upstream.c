@@ -197,52 +197,199 @@ upstream_cleanup:
 }
 
 /*
- * Check if a host is in the upstream list
+ * Binary prefix trie for O(W) CIDR upstream lookups (W=128 for IPv6).
  */
-struct upstream *upstream_get (char *host, struct upstream *up)
+struct upstream_trie_node {
+        struct upstream_trie_node *children[2];
+        struct upstream *entry;   /* non-NULL if a CIDR prefix ends here */
+};
+
+static int
+prefix_length_from_mask (const unsigned char mask[IPV6_LEN])
 {
-        int n;
-        struct addrinfo hints, *res = NULL;
-        char ipbuf[16] = {0};
+        int i, bits = 0;
 
-        while (up) {
-                if (up->target.type == HST_NONE)
-                        break;
-
-                if (hostspec_match(host, &up->target))
-                        break;
-
-                if (up->target.type == HST_NUMERIC) {
-                        if (ipbuf[0] == '\0') {
-                                memset (&hints, 0, sizeof (struct addrinfo));
-                                hints.ai_family = AF_INET;
-                                hints.ai_socktype = SOCK_STREAM;
-
-                                n = getaddrinfo (host, NULL, &hints, &res);
-                                if (n == 0)
-                                        get_ip_string (res->ai_addr, ipbuf, sizeof (ipbuf));
+        for (i = 0; i < IPV6_LEN; i++) {
+                if (mask[i] == 0xff) {
+                        bits += 8;
+                } else {
+                        unsigned char b = mask[i];
+                        while (b & 0x80) {
+                                bits++;
+                                b <<= 1;
                         }
-
-                        if (hostspec_match(ipbuf, &up->target))
-                                break;
+                        break;
                 }
+        }
+        return bits;
+}
 
-                up = up->next;
+static int
+upstream_trie_insert (struct upstream_trie_node **root, struct upstream *entry)
+{
+        int prefix_len, i;
+        const unsigned char *network;
+        struct upstream_trie_node *node;
+
+        prefix_len = prefix_length_from_mask (entry->target.address.ip.mask);
+        network = entry->target.address.ip.network;
+
+        if (!*root) {
+                *root = (struct upstream_trie_node *)
+                        safecalloc (1, sizeof (struct upstream_trie_node));
+                if (!*root)
+                        return -1;
         }
 
-        if (up && (!up->host))
-                up = NULL;
+        node = *root;
+        for (i = 0; i < prefix_len; i++) {
+                int bit = (network[i / 8] >> (7 - (i % 8))) & 1;
 
-        if (up)
+                if (!node->children[bit]) {
+                        node->children[bit] = (struct upstream_trie_node *)
+                                safecalloc (1, sizeof (struct upstream_trie_node));
+                        if (!node->children[bit])
+                                return -1;
+                }
+                node = node->children[bit];
+        }
+
+        /* First insertion for this prefix wins (matches list-scan order) */
+        if (!node->entry)
+                node->entry = entry;
+        return 0;
+}
+
+struct upstream_trie_node *
+upstream_trie_build (struct upstream *upstream_list)
+{
+        struct upstream_trie_node *root = NULL;
+        struct upstream *up = upstream_list;
+
+        while (up) {
+                if (up->target.type == HST_NUMERIC) {
+                        if (upstream_trie_insert (&root, up) < 0) {
+                                upstream_trie_free (root);
+                                return NULL;
+                        }
+                }
+                up = up->next;
+        }
+        return root;
+}
+
+static struct upstream *
+upstream_trie_lookup_ip (struct upstream_trie_node *root,
+                         const unsigned char ip[IPV6_LEN])
+{
+        struct upstream_trie_node *node = root;
+        struct upstream *best = NULL;
+        int i;
+
+        if (!node)
+                return NULL;
+
+        if (node->entry)
+                best = node->entry;
+
+        for (i = 0; i < IPV6_LEN * 8; i++) {
+                int bit = (ip[i / 8] >> (7 - (i % 8))) & 1;
+
+                node = node->children[bit];
+                if (!node)
+                        break;
+                if (node->entry)
+                        best = node->entry;
+        }
+        return best;
+}
+
+void
+upstream_trie_free (struct upstream_trie_node *node)
+{
+        if (!node)
+                return;
+        upstream_trie_free (node->children[0]);
+        upstream_trie_free (node->children[1]);
+        safefree (node);
+}
+
+/*
+ * Check if a host is in the upstream list
+ */
+struct upstream *upstream_get (char *host, struct upstream *up,
+                               struct upstream_trie_node *trie)
+{
+        unsigned char ip[IPV6_LEN];
+        int is_ip;
+        struct upstream *match = NULL;
+        struct upstream *default_up = NULL;
+        struct upstream *cur;
+
+        /* Parse host to binary IP once */
+        is_ip = (host && host[0] && full_inet_pton (host, ip) > 0);
+
+        /* If host is a valid IP, check the CIDR trie */
+        if (is_ip) {
+                match = upstream_trie_lookup_ip (trie, ip);
+                if (match)
+                        goto found;
+        }
+
+        /* Walk linked list checking only HST_STRING entries */
+        for (cur = up; cur; cur = cur->next) {
+                if (cur->target.type == HST_NONE) {
+                        default_up = cur;
+                        break;
+                }
+                if (cur->target.type == HST_STRING) {
+                        if (hostspec_match (host, &cur->target)) {
+                                match = cur;
+                                goto found;
+                        }
+                }
+        }
+
+        /* If host is a domain name, resolve and check CIDR trie */
+        if (!is_ip && trie) {
+                struct addrinfo hints, *res = NULL;
+                int n;
+                char ipbuf[16] = {0};
+                unsigned char resolved_ip[IPV6_LEN];
+
+                memset (&hints, 0, sizeof (struct addrinfo));
+                hints.ai_family = AF_INET;
+                hints.ai_socktype = SOCK_STREAM;
+
+                n = getaddrinfo (host, NULL, &hints, &res);
+                if (n == 0) {
+                        get_ip_string (res->ai_addr, ipbuf, sizeof (ipbuf));
+                        freeaddrinfo (res);
+
+                        if (ipbuf[0] && full_inet_pton (ipbuf, resolved_ip) > 0)
+                                match = upstream_trie_lookup_ip (trie, resolved_ip);
+                } else if (res) {
+                        freeaddrinfo (res);
+                }
+
+                if (match)
+                        goto found;
+        }
+
+        /* Fall through to default */
+        match = default_up;
+
+found:
+        if (match && (!match->host))
+                match = NULL;
+
+        if (match)
                 log_message (LOG_INFO, "Found upstream proxy %s %s:%d for %s",
-                             proxy_type_name(up->type), up->host, up->port, host);
+                             proxy_type_name(match->type), match->host, match->port, host);
         else
                 log_message (LOG_INFO, "No upstream proxy for %s", host);
 
-        if (res)
-                freeaddrinfo (res);
-
-        return up;
+        return match;
 }
 
 void free_upstream_list (struct upstream *up)

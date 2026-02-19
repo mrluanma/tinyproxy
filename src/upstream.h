@@ -64,12 +64,16 @@ struct upstream {
 };
 
 #ifdef UPSTREAM_SUPPORT
+struct upstream_trie_node;
 const char *proxy_type_name(proxy_type type);
 extern enum upstream_build_error upstream_add (
                           const char *host, int port, char *domain,
                           const char *user, const char *pass,
                           proxy_type type, struct upstream **upstream_list);
-extern struct upstream *upstream_get (char *host, struct upstream *up);
+extern struct upstream *upstream_get (char *host, struct upstream *up,
+                                     struct upstream_trie_node *trie);
+extern struct upstream_trie_node *upstream_trie_build (struct upstream *upstream_list);
+extern void upstream_trie_free (struct upstream_trie_node *node);
 extern void free_upstream_list (struct upstream *up);
 extern const char* upstream_build_error_string(enum upstream_build_error);
 #endif /* UPSTREAM_SUPPORT */
