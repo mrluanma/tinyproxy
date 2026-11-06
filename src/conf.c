@@ -312,7 +312,7 @@ void free_config (struct config_s *conf)
         safefree (conf->reversebaseurl);
 #endif
 #ifdef UPSTREAM_SUPPORT
-        upstream_trie_free (conf->upstream_trie);
+        upstream_ranges_free (conf->upstream_ranges);
         free_upstream_list (conf->upstream_list);
 #endif                          /* UPSTREAM_SUPPORT */
         safefree (conf->pidpath);
@@ -508,7 +508,7 @@ int reload_config_file (const char *config_fname, struct config_s *conf)
         }
 
 #ifdef UPSTREAM_SUPPORT
-        conf->upstream_trie = upstream_trie_build (conf->upstream_list);
+        conf->upstream_ranges = upstream_ranges_build (conf->upstream_list);
 #endif
 
         /* Set the default values if they were not set in the config file. */

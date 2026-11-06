@@ -64,7 +64,7 @@ struct config_s {
 #endif
 #ifdef UPSTREAM_SUPPORT
         struct upstream *upstream_list;
-        struct upstream_trie_node *upstream_trie;
+        struct upstream_ranges *upstream_ranges;
 #endif                          /* UPSTREAM_SUPPORT */
         char *pidpath;
         unsigned int idletimeout;
