@@ -57,6 +57,19 @@ const char* upstream_build_error_string(enum upstream_build_error ube) {
         return emap[ube];
 }
 
+static void
+upstream_free (struct upstream *up)
+{
+        if (!up)
+                return;
+        if (up->target.type == HST_STRING)
+                safefree (up->target.address.string);
+        safefree (up->ua.user);
+        safefree (up->pass);
+        safefree (up->host);
+        safefree (up);
+}
+
 /**
  * Construct an upstream struct from input data.
  */
@@ -83,7 +96,7 @@ static struct upstream *upstream_build (const char *host, int port, char *domain
                         ret = basicauth_string(user, pass, b, sizeof b);
                         if (ret == 0) {
                                 *ube = UBE_USERLEN;
-                                return NULL;
+                                goto fail;
                         }
                         up->ua.authstr = safestrdup (b);
                 } else {
@@ -136,12 +149,7 @@ static struct upstream *upstream_build (const char *host, int port, char *domain
         return up;
 
 fail:
-        safefree (up->ua.user);
-        safefree (up->pass);
-        safefree (up->host);
-        if(up->target.type == HST_STRING)
-                safefree (up->target.address.string);
-        safefree (up);
+        upstream_free (up);
 
         return NULL;
 }
@@ -188,12 +196,7 @@ enum upstream_build_error upstream_add (
         return ube;
 
 upstream_cleanup:
-        safefree (up->ua.user);
-        safefree (up->pass);
-        safefree (up->host);
-        if(up->target.type == HST_STRING)
-                safefree (up->target.address.string);
-        safefree (up);
+        upstream_free (up);
 
         return ube;
 }
@@ -540,9 +543,81 @@ merge_pieces6 (struct upstream_range6 *r, size_t n)
         return out;
 }
 
-struct upstream_ranges *
-upstream_ranges_build (struct upstream *upstream_list)
+/*
+ * Each CIDR rule gets its own upstream record when the config is parsed,
+ * but a large rule set usually points at only a handful of distinct
+ * proxies.  Collapse the records referenced by the range table so that
+ * every range sharing a target points at one canonical record, then drop
+ * the now-unused per-rule records from the list.  The canonical records
+ * stay in the list so that the config keeps an owner for them and
+ * UPSTREAM_CONFIGURED() (which only looks at the list) still sees them.
+ */
+static void
+share_numeric_upstreams (struct upstream_ranges *ranges,
+                         struct upstream **upstream_list)
 {
+        struct upstream **reps;
+        struct upstream **link;
+        size_t nreps = 0, cap, i, j;
+
+        cap = ranges->n4 + ranges->n6;
+        if (!cap)
+                return;
+
+        reps = safemalloc (cap * sizeof (*reps));
+        if (!reps)
+                return;         /* only an optimization; keep both copies */
+
+        for (i = 0; i < ranges->n4; i++) {
+                struct upstream *up = ranges->v4[i].up;
+
+                for (j = 0; j < nreps; j++) {
+                        if (upstream_equiv (reps[j], up))
+                                break;
+                }
+                if (j == nreps)
+                        reps[nreps++] = up;
+                ranges->v4[i].up = reps[j];
+        }
+
+        for (i = 0; i < ranges->n6; i++) {
+                struct upstream *up = ranges->v6[i].up;
+
+                for (j = 0; j < nreps; j++) {
+                        if (upstream_equiv (reps[j], up))
+                                break;
+                }
+                if (j == nreps)
+                        reps[nreps++] = up;
+                ranges->v6[i].up = reps[j];
+        }
+
+        link = upstream_list;
+        while (*link) {
+                struct upstream *up = *link;
+
+                if (up->target.type == HST_NUMERIC) {
+                        for (j = 0; j < nreps; j++) {
+                                if (reps[j] == up)
+                                        break;
+                        }
+                        if (j == nreps) {
+                                *link = up->next;
+                                upstream_free (up);
+                                continue;
+                        }
+                }
+                link = &(*link)->next;
+        }
+
+        safefree (reps);
+}
+
+struct upstream_ranges *
+upstream_ranges_build (struct upstream **upstream_list_ptr)
+{
+        struct upstream *upstream_list = *upstream_list_ptr;
+
         struct upstream_ranges *ranges;
         struct range_cand4 *c4 = NULL;
         struct range_cand6 *c6 = NULL;
@@ -716,6 +791,7 @@ upstream_ranges_build (struct upstream *upstream_list)
 
         safefree (c4);
         safefree (c6);
+        share_numeric_upstreams (ranges, upstream_list_ptr);
         return ranges;
 
 oom_lists:
@@ -883,12 +959,7 @@ void free_upstream_list (struct upstream *up)
         while (up) {
                 struct upstream *tmp = up;
                 up = up->next;
-                if(tmp->target.type == HST_STRING)
-                        safefree (tmp->target.address.string);
-                safefree (tmp->ua.user);
-                safefree (tmp->pass);
-                safefree (tmp->host);
-                safefree (tmp);
+                upstream_free (tmp);
         }
 }
 

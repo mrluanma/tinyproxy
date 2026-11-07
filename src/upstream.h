@@ -72,7 +72,7 @@ extern enum upstream_build_error upstream_add (
                           proxy_type type, struct upstream **upstream_list);
 extern struct upstream *upstream_get (char *host, struct upstream *up,
                                       struct upstream_ranges *ranges);
-extern struct upstream_ranges *upstream_ranges_build (struct upstream *upstream_list);
+extern struct upstream_ranges *upstream_ranges_build (struct upstream **upstream_list);
 extern void upstream_ranges_free (struct upstream_ranges *ranges);
 extern void free_upstream_list (struct upstream *up);
 extern const char* upstream_build_error_string(enum upstream_build_error);

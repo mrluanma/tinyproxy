@@ -521,7 +521,7 @@ int reload_config_file (const char *config_fname, struct config_s *conf)
         }
 
 #ifdef UPSTREAM_SUPPORT
-        conf->upstream_ranges = upstream_ranges_build (conf->upstream_list);
+        conf->upstream_ranges = upstream_ranges_build (&conf->upstream_list);
 #endif
 
         /* Set the default values if they were not set in the config file. */
