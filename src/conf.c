@@ -25,6 +25,9 @@
 
 #include "common.h"
 #include <regex.h>
+#if defined(__GLIBC__)
+#include <malloc.h>
+#endif
 #include "conf.h"
 
 #include "acl.h"
@@ -338,6 +341,16 @@ void free_config (struct config_s *conf)
         }
 
         memset (conf, 0, sizeof(*conf));
+
+#if defined(__GLIBC__)
+        /*
+         * A config can be a few hundred KB and is freed on every reload,
+         * while the process keeps running.  glibc otherwise keeps the
+         * freed pages in the main arena instead of returning them to the
+         * OS.  Hand them back; this only runs on reloads and at exit.
+         */
+        malloc_trim (0);
+#endif
 }
 
 /*
