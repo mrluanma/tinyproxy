@@ -52,11 +52,27 @@ struct child {
 	volatile int done;
 };
 
+/*
+ * Main loop wakeup pipe.  The main thread sleeps in poll() while its
+ * children finish, so a finished child has to poke it to make it reap
+ * the thread and drop its config reference.
+ */
+static int wakeup_pipe[2] = { -1, -1 };
+
+static void wakeup_main_loop (void)
+{
+	char c = 0;
+
+	if (wakeup_pipe[1] != -1)
+		(void) write (wakeup_pipe[1], &c, 1);
+}
+
 static void* child_thread(void* data)
 {
 	struct child *c = data;
 	handle_connection (&c->conn, &c->client.addr);
 	c->done = 1;
+	wakeup_main_loop ();
 	return NULL;
 }
 
@@ -85,8 +101,9 @@ void child_main_loop (void)
         union sockaddr_union cliaddr_storage;
         struct sockaddr *cliaddr = (void*) &cliaddr_storage;
         socklen_t clilen;
-        int nfds = sblist_getsize(listen_fds);
-        pollfd_struct *fds = safecalloc(nfds, sizeof *fds);
+        int nlisten = sblist_getsize(listen_fds);
+        int nfds;
+        pollfd_struct *fds;
         ssize_t i;
         int ret, listenfd, was_full = 0;
         pthread_attr_t *attrp, attr;
@@ -94,10 +111,21 @@ void child_main_loop (void)
 
         childs = sblist_new(sizeof (struct child*), config->maxclients);
 
-        for (i = 0; i < nfds; i++) {
+        if (wakeup_pipe[0] == -1 && pipe (wakeup_pipe) == 0) {
+                fcntl (wakeup_pipe[0], F_SETFL, O_NONBLOCK);
+                fcntl (wakeup_pipe[1], F_SETFL, O_NONBLOCK);
+        }
+        nfds = nlisten + (wakeup_pipe[0] != -1);
+        fds = safecalloc(nfds, sizeof *fds);
+
+        for (i = 0; i < nlisten; i++) {
                 int *fd = sblist_get(listen_fds, i);
                 fds[i].fd = *fd;
                 fds[i].events |= MYPOLL_READ;
+        }
+        if (wakeup_pipe[0] != -1) {
+                fds[nlisten].fd = wakeup_pipe[0];
+                fds[nlisten].events = MYPOLL_READ;
         }
 
         /*
@@ -150,7 +178,16 @@ void child_main_loop (void)
                         continue;
                 }
 
-                for (i = 0; i < nfds; i++) {
+                if (wakeup_pipe[0] != -1 &&
+                    (fds[nlisten].revents & MYPOLL_READ)) {
+                        char buf[64];
+
+                        while (read (wakeup_pipe[0], buf, sizeof buf) > 0)
+                                ;
+                        continue;   /* collect_threads() runs at the top */
+                }
+
+                for (i = 0; i < nlisten; i++) {
                         if (fds[i].revents & MYPOLL_READ) {
                                 /*
                                  * only accept the connection on the first
@@ -258,6 +295,11 @@ again:
 }
 
 void child_free_children(void) {
+	if (wakeup_pipe[0] != -1) {
+		close (wakeup_pipe[0]);
+		close (wakeup_pipe[1]);
+		wakeup_pipe[0] = wakeup_pipe[1] = -1;
+	}
 	sblist_free(childs);
 	childs = 0;
 }
