@@ -559,6 +559,7 @@ share_numeric_upstreams (struct upstream_ranges *ranges,
         struct upstream **reps;
         struct upstream **link;
         size_t nreps = 0, cap, i, j;
+        size_t removed = 0;
 
         cap = ranges->n4 + ranges->n6;
         if (!cap)
@@ -604,11 +605,17 @@ share_numeric_upstreams (struct upstream_ranges *ranges,
                         if (j == nreps) {
                                 *link = up->next;
                                 upstream_free (up);
+                                removed++;
                                 continue;
                         }
                 }
                 link = &(*link)->next;
         }
+
+        if (removed)
+                log_message (LOG_INFO,
+                             "Shared %zu numeric upstream rules across %zu targets",
+                             removed, nreps);
 
         safefree (reps);
 }
