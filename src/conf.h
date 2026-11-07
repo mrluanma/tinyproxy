@@ -111,6 +111,12 @@ struct config_s {
          * Extra headers to be added to outgoing HTTP requests.
          */
         sblist* add_headers;
+
+        /*
+         * Number of references to this config; the config is freed
+         * when it drops to zero (see config_ref/config_unref).
+         */
+        unsigned int refcount;
 };
 
 extern int reload_config_file (const char *config_fname, struct config_s *conf);

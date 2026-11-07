@@ -48,15 +48,28 @@
  * Global Structures
  */
 struct config_s *config;
-static struct config_s configs[2];
 static const char* config_file;
 unsigned int received_sighup = FALSE;   /* boolean */
 
-static struct config_s*
-get_next_config(void)
+/*
+ * Config lifetime is reference counted so that connection threads can
+ * keep pointers into a config that has been replaced by a reload.
+ * All ref/unref calls happen on the main thread only, so no locking
+ * is needed.
+ */
+void config_ref (struct config_s *conf)
 {
-        if (config == &configs[0]) return &configs[1];
-        return &configs[0];
+        conf->refcount++;
+}
+
+void config_unref (struct config_s *conf)
+{
+        if (!conf)
+                return;
+        if (--conf->refcount == 0) {
+                free_config (conf);
+                safefree (conf);
+        }
 }
 
 /*
@@ -255,17 +268,29 @@ change_user (const char *program)
 int reload_config (int reload_logging)
 {
         int ret, ret2;
-        struct config_s *c_next = get_next_config();
+        struct config_s *c_next, *old;
 
         log_message (LOG_NOTICE, "Reloading config file (%s)", config_file);
 
         if (reload_logging) shutdown_logging ();
 
+        c_next = safemalloc (sizeof *c_next);
+        if (!c_next) {
+                log_message (LOG_ERR,
+                             "Unable to allocate memory for the new config");
+                return -1;
+        }
+
         ret = reload_config_file (config_file, c_next);
 
         if (ret == 0) {
-                if(config) free_config (config);
+                c_next->refcount = 1;
+                old = config;
                 config = c_next;
+                config_unref (old);
+        } else {
+                free_config (c_next);
+                safefree (c_next);
         }
 
         ret2 = reload_logging ? setup_logging () : 0;
@@ -444,9 +469,10 @@ main (int argc, char **argv)
                 filter_destroy ();
 #endif /* FILTER_ENABLE */
 
-        free_config (config);
-
         shutdown_logging ();
+
+        config_unref (config);
+        config = NULL;
 
         return EXIT_SUCCESS;
 }

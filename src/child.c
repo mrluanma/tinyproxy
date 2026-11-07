@@ -48,6 +48,7 @@ struct child {
 	pthread_t thread;
 	struct client client;
 	struct conn_s conn;
+	struct config_s *conf;
 	volatile int done;
 };
 
@@ -69,6 +70,7 @@ static void collect_threads(void)
 		if (c->done) {
 			pthread_join(c->thread, 0);
 			sblist_delete(childs, i);
+			config_unref(c->conf);
 			safefree(c);
 		} else i++;
 	}
@@ -212,8 +214,12 @@ oom:
                         pthread_attr_setstacksize(attrp, 256*1024);
                 }
 
+                child->conf = config;
+                config_ref(child->conf);
+
                 if (pthread_create(&child->thread, attrp, child_thread, child) != 0) {
                         sblist_delete(childs, sblist_getsize(childs) -1);
+                        config_unref(child->conf);
                         free(child);
                         goto oom;
 		}

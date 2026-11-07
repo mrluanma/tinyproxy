@@ -33,5 +33,7 @@ extern struct config_s *config;
 extern unsigned int received_sighup;    /* boolean */
 
 extern int reload_config (int reload_logging);
+extern void config_ref (struct config_s *conf);
+extern void config_unref (struct config_s *conf);
 
 #endif /* __MAIN_H__ */
