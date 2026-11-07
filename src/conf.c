@@ -27,6 +27,8 @@
 #include <regex.h>
 #if defined(__GLIBC__)
 #include <malloc.h>
+#elif defined(__APPLE__)
+#include <malloc/malloc.h>
 #endif
 #include "conf.h"
 
@@ -48,6 +50,22 @@
 #else
 #define TP_LINE_MAX 1024
 #endif
+
+/*
+ * Ask the allocator to return free pages to the OS.  Configs are large
+ * and are replaced on every reload, and building one briefly allocates
+ * many per-rule upstream records that are freed again once the range
+ * table has been built.  Without this the allocator keeps those pages.
+ */
+static void
+release_free_memory (void)
+{
+#if defined(__GLIBC__)
+        malloc_trim (0);
+#elif defined(__APPLE__)
+        malloc_zone_pressure_relief (NULL, 0);
+#endif
+}
 
 /*
  * The configuration directives are defined in the structure below.  Each
@@ -342,15 +360,7 @@ void free_config (struct config_s *conf)
 
         memset (conf, 0, sizeof(*conf));
 
-#if defined(__GLIBC__)
-        /*
-         * A config can be a few hundred KB and is freed on every reload,
-         * while the process keeps running.  glibc otherwise keeps the
-         * freed pages in the main arena instead of returning them to the
-         * OS.  Hand them back; this only runs on reloads and at exit.
-         */
-        malloc_trim (0);
-#endif
+        release_free_memory ();
 }
 
 /*
@@ -550,6 +560,9 @@ int reload_config_file (const char *config_fname, struct config_s *conf)
         }
 
 done:
+        if (ret == 0)
+                release_free_memory ();
+
         return ret;
 }
 
